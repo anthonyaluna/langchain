@@ -13,8 +13,8 @@ from langchain_core.callbacks import (
 )
 from langchain_core.language_models.llms import LLM
 from langchain_core.outputs import GenerationChunk
-from langchain_core.utils import from_env, get_pydantic_field_names
-from pydantic import ConfigDict, Field, model_validator
+from langchain_core.utils import get_pydantic_field_names, secret_from_env
+from pydantic import ConfigDict, Field, SecretStr, model_validator
 from typing_extensions import Self
 
 logger = logging.getLogger(__name__)
@@ -105,8 +105,10 @@ class HuggingFaceEndpoint(LLM):
         providers available for the model, sorted by the user's order in https://hf.co/settings/inference-providers.
         available providers can be found in the [huggingface_hub documentation](https://huggingface.co/docs/huggingface_hub/guides/inference#supported-providers-and-tasks)."""
 
-    huggingfacehub_api_token: str | None = Field(
-        default_factory=from_env("HUGGINGFACEHUB_API_TOKEN", default=None)
+    huggingfacehub_api_token: SecretStr | None = Field(
+        default_factory=secret_from_env("HUGGINGFACEHUB_API_TOKEN", default=None),
+        exclude=True,
+        repr=False,
     )
 
     max_new_tokens: int = 512
@@ -167,9 +169,9 @@ class HuggingFaceEndpoint(LLM):
 
     model: str
 
-    client: Any = None
+    client: Any = Field(default=None, exclude=True, repr=False)
 
-    async_client: Any = None
+    async_client: Any = Field(default=None, exclude=True, repr=False)
 
     task: str | None = None
     """Task to call the model with. Should be a task that returns `generated_text`."""
@@ -177,6 +179,11 @@ class HuggingFaceEndpoint(LLM):
     model_config = ConfigDict(
         extra="forbid",
     )
+
+    @property
+    def lc_secrets(self) -> dict[str, str]:
+        """Mapping of secret keys to environment variables."""
+        return {"huggingfacehub_api_token": "HUGGINGFACEHUB_API_TOKEN"}
 
     @model_validator(mode="before")
     @classmethod
@@ -252,8 +259,10 @@ class HuggingFaceEndpoint(LLM):
     @model_validator(mode="after")
     def validate_environment(self) -> Self:
         """Validate that package is installed and that the API token is valid."""
-        huggingfacehub_api_token = self.huggingfacehub_api_token or os.getenv(
-            "HF_TOKEN"
+        huggingfacehub_api_token = (
+            self.huggingfacehub_api_token.get_secret_value()
+            if self.huggingfacehub_api_token
+            else os.getenv("HF_TOKEN")
         )
         # Local/custom endpoint URL -> don't pass HF token (avoids 401s and egress).
         if self.endpoint_url and not _is_huggingface_hosted_url(self.endpoint_url):
